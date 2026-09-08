@@ -9,7 +9,16 @@
 
 struct termios orig_termios;
 
+void editorRefreshScreen() {
+    // STDOUT_FILENO represents the screen of the terminal 
+    // clears the terminal screen 
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    // changes the cursor position
+    write(STDOUT_FILENO, "\x1B[H", 3);
+}
+
 void die(const char *s) {
+    editorRefreshScreen(); 
     perror(s); // looks at the errno variable and prints an error message for it <stdlib.h> 
     exit(1); // <stdlib.h>
 }
@@ -47,21 +56,35 @@ void enableRawMode() {
     
 }
 
+char editorReadKey() {
+    int nread;
+    char c;
+    // STDIN_FILENO representes the keyboard / terminal input 
+    while ((nread = read(STDIN_FILENO, &c, 1)) == -1) {
+        if (nread == -1 && errno != EAGAIN) die("read");
+    }
+    return c;
+}
+
+void editorProcessKeypress() {
+    char c = editorReadKey();
+
+    switch(c) {
+        case CTRL_KEY('q'):
+            editorRefreshScreen(); 
+            exit(0);
+            break;
+    }
+}
+
+
+
 int main() {
     enableRawMode();
 
     while (1) {
-        char c = '\0';
-        // used to take in input from the users keyboard, goes through each char and store it in c  
-        if (read(STDIN_FILENO, &c, 1) == -1 && errno != EAGAIN) die("read");
-        // iscntrl is from <ctype.h>, whether character is a control character that we dont want to print on the screen
-        // ASCII 0-31 and 127 are all non printable 
-        if (iscntrl(c)) {
-            printf("%d\r\n", c);
-        } else {
-            printf("%d ('%c')\r\n", c, c);
-        }
-        if (c== CTRL_KEY('q')) break;
+        editorRefreshScreen();
+        editorProcessKeypress();
     }
 
     return 0;
