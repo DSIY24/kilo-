@@ -1,3 +1,4 @@
+/***    includes ***/
 #include <errno.h>
 #include <stdio.h>
 #include <ctype.h>
@@ -5,26 +6,29 @@
 #include <termios.h>
 #include <unistd.h>
 
+/*** defines ***/ 
 #define CTRL_KEY(k) ((k) & 0x1f)
 
-struct termios orig_termios;
+/*** data ***/
+struct editorConfig {
+    struct termios orig_termios;
+};
 
-void editorRefreshScreen() {
-    // STDOUT_FILENO represents the screen of the terminal 
-    // clears the terminal screen 
-    write(STDOUT_FILENO, "\x1b[2J", 4);
-    // changes the cursor position
-    write(STDOUT_FILENO, "\x1B[H", 3);
-}
+struct editorConfig E;
 
+
+/*** terminal ***/
 void die(const char *s) {
-    editorRefreshScreen(); 
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    write(STDOUT_FILENO, "\x1B[H", 3);
+
+
     perror(s); // looks at the errno variable and prints an error message for it <stdlib.h> 
     exit(1); // <stdlib.h>
 }
 
 void disableRawMode() {
-    tcsetattr(STDIN_FILENO, TCSAFLUSH, &orig_termios);
+    tcsetattr(STDIN_FILENO, TCSAFLUSH, &E.orig_termios);
     die("tcsetattr");
 }
 /* In the default canonical mode the terminal processes input line by line (allowing the user to edit text before 
@@ -32,12 +36,12 @@ void disableRawMode() {
  */
 void enableRawMode() {
     // tcgetattr() is used the read the current attibutes into a struct <termios.h>   
-    if (tcgetattr(STDIN_FILENO, &orig_termios) == -1) die("tcgetattr");
+    if (tcgetattr(STDIN_FILENO, &E.orig_termios) == -1) die("tcgetattr");
     // used to run the disableRawMode function as soon as the program exits <stdlib.h> 
     atexit(disableRawMode);
 
 
-    struct termios raw = orig_termios;
+    struct termios raw = E.orig_termios;
     raw.c_iflag &= ~(BRKINT | INPCK | ISTRIP | IXON | ICRNL);// IXON:ctrl-s/q | ICRNL:ctrl-m | BRKIINT  
     raw.c_iflag &= ~(OPOST); // used to convert \n into \r\n 
     raw.c_iflag &= ~(CS8);
@@ -65,6 +69,27 @@ char editorReadKey() {
     }
     return c;
 }
+
+ /*** output ***/
+void editorDrawRows() {
+    for (int i = 0; i < 24; i++) {
+        write(STDOUT_FILENO, "~\r\n",3);
+    }
+}
+
+void editorRefreshScreen() {
+    // STDOUT_FILENO represents the screen of the terminal 
+    // clears the terminal screen 
+    write(STDOUT_FILENO, "\x1b[2J", 4);
+    // changes the cursor position
+    write(STDOUT_FILENO, "\x1B[H", 3);
+    
+    editorDrawRows();
+
+    write(STDOUT_FILENO, "\x1B[H", 3);
+}
+
+/*** input ***/
 
 void editorProcessKeypress() {
     char c = editorReadKey();
