@@ -5,6 +5,7 @@
 #include <stdlib.h>
 #include <string.h>
 #include <sys/ioctl.h>
+#include <sys/types.h>
 #include <termios.h>
 #include <unistd.h>
 
@@ -15,7 +16,7 @@
 
 enum editorKey {
     ARROW_LEFT = 1000, // the rest get enummerated from 1000
-    ARROW_RIGHT,       // 1001, 1002, 1003
+    ARROW_RIGHT,       // 1001, 1002, 1003...
     ARROW_UP,
     ARROW_DOWN,
     DEL_KEY,
@@ -27,14 +28,23 @@ enum editorKey {
 
 /*** data ***/
 // struct used to store editor state
+
+typedef struct {
+    int size;
+    char *chars;
+} erow;
+
 typedef struct {
     int cx, cy;
     int screenrows;
     int screencols;
+    int numrows;
+    erow row;
     struct termios orig_termios;
 } editorConfig;
 
 editorConfig E;
+
 
 /*** terminal ***/
 void die(const char *s) {
@@ -207,6 +217,17 @@ int getWindowSize(int *rows, int *cols) {
         return 0;
     }
 }
+/*** file i/o ***/
+
+void editorOpen() {
+    char *line = "Hello World";
+    ssize_t linelen = strlen(line) + 1;
+
+    E.row.size = linelen;
+    E.row.chars = malloc(linelen);
+    memcpy(E.row.chars, line, linelen );
+    E.numrows = 1;
+}
 
 /*** append buffer ***/
 
@@ -237,29 +258,35 @@ void abFree(abuf *ab) { free(ab->b); }
 /*** output ***/
 void editorDrawRows(abuf *ab) {
     for (int i = 0; i < E.screenrows; i++) {
-        if (i == E.screenrows / 3) {
-            char welcome[80];
-            // snprintf writes formated data into a buffer
-            // pointer to buffer, max bytes to write, format, variables
-            int welcomelen =
-                snprintf(welcome, sizeof(welcome), "Kilo Editor -- version %s",
-                         KILO_VERSION);
+        if (i >= E.numrows) {
+            if (i == E.screenrows / 3) {
+                char welcome[80];
+                // snprintf writes formated data into a buffer
+                // pointer to buffer, max bytes to write, format, variables
+                int welcomelen =
+                    snprintf(welcome, sizeof(welcome), "Kilo Editor -- version %s",
+                             KILO_VERSION);
 
-            if (welcomelen > E.screencols)
-                welcomelen = E.screencols;
-            int padding = (E.screencols - welcomelen) / 2;
-            if (padding) {
+                if (welcomelen > E.screencols)
+                    welcomelen = E.screencols;
+                int padding = (E.screencols - welcomelen) / 2;
+                if (padding) {
+                    abAppend(ab, "~", 1);
+                    padding--;
+                }
+                while (padding--)
+                    abAppend(ab, " ", 1);
+
+                abAppend(ab, welcome, welcomelen);
+            } else {
                 abAppend(ab, "~", 1);
-                padding--;
             }
-            while (padding--)
-                abAppend(ab, " ", 1);
-
-            abAppend(ab, welcome, welcomelen);
         } else {
-            abAppend(ab, "~", 1);
+            int len = E.row.size;
+            // if text exceeds the width of the terminal
+            if (len > E.screencols) len = E.screencols; 
+            abAppend(ab,E.row.chars, len);
         }
-
         abAppend(ab, "\x1b[K", 3);
         if (i < (E.screenrows - 1)) {
             abAppend(ab, "\r\n", 2);
@@ -354,6 +381,7 @@ void editorProcessKeypress() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.numrows = 0;
 
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
@@ -362,6 +390,7 @@ void initEditor() {
 int main() {
     enableRawMode();
     initEditor();
+    editorOpen();
 
     while (1) {
         editorRefreshScreen();
