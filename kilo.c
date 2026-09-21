@@ -1,4 +1,8 @@
 /***    includes ***/
+#define _DEFAULT_SOURCE
+#define _BSD_SOURCE
+#define _GNU_SOURCE
+
 #include <ctype.h>
 #include <errno.h>
 #include <stdio.h>
@@ -36,17 +40,18 @@ typedef struct {
 
 typedef struct {
     int cx, cy;
+    int rowoff;
     int screenrows;
     int screencols;
     int numrows;
-    erow row;
+    erow *row;
     struct termios orig_termios;
 } editorConfig;
 
 editorConfig E;
 
-
 /*** terminal ***/
+
 void die(const char *s) {
     write(STDOUT_FILENO, "\x1b[2J", 4);
     write(STDOUT_FILENO, "\x1B[H", 3);
@@ -217,16 +222,35 @@ int getWindowSize(int *rows, int *cols) {
         return 0;
     }
 }
+void editorAppendRow(char *s, size_t len) {
+    E.row = realloc(E.row, sizeof(erow) * (E.numrows + 1));
+
+    int at = E.numrows;
+    E.row[at].size = len;
+    E.row[at].chars = malloc(len + 1);
+    memcpy(E.row[at].chars, s, len);
+    E.row[at].chars[len] = '\0';
+    E.numrows ++;
+}
+
 /*** file i/o ***/
 
-void editorOpen() {
-    char *line = "Hello World";
-    ssize_t linelen = strlen(line) + 1;
+void editorOpen(char *filename) {
+    FILE *fp = fopen(filename, "r");
+    if (fp == NULL)
+        die("fopen");
 
-    E.row.size = linelen;
-    E.row.chars = malloc(linelen);
-    memcpy(E.row.chars, line, linelen );
-    E.numrows = 1;
+    char *line = NULL;
+    size_t linecap = 0;
+    ssize_t linelen;
+    while ((linelen = getline(&line, &linecap, fp)) != -1) {
+        while (linelen > 0 &&
+               (line[linelen - 1] == '\n' || line[linelen - 1] == '\r'))
+            linelen --;
+        editorAppendRow(line, linelen);
+    }
+    free(line);
+    fclose(fp);
 }
 
 /*** append buffer ***/
@@ -256,16 +280,28 @@ void abAppend(abuf *ab, const char *s, int len) {
 void abFree(abuf *ab) { free(ab->b); }
 
 /*** output ***/
+
+void editorScroll() {
+    if (E.cy < E.rowoff) {
+        E.rowoff = E.cy;
+    }
+    if (E.cy >= E.rowoff + E.screenrows) {
+        E.rowoff = E.cy - E.screenrows + 1;
+    }
+}
+
 void editorDrawRows(abuf *ab) {
     for (int i = 0; i < E.screenrows; i++) {
-        if (i >= E.numrows) {
-            if (i == E.screenrows / 3) {
+        int filerow = i + E.rowoff;
+        if (filerow >= E.numrows) {
+            // if no file is inputed, displays a welcome message
+            if (E.numrows == 0 && i == E.screenrows / 3) {
                 char welcome[80];
                 // snprintf writes formated data into a buffer
                 // pointer to buffer, max bytes to write, format, variables
                 int welcomelen =
-                    snprintf(welcome, sizeof(welcome), "Kilo Editor -- version %s",
-                             KILO_VERSION);
+                    snprintf(welcome, sizeof(welcome),
+                             "Kilo Editor -- version %s", KILO_VERSION);
 
                 if (welcomelen > E.screencols)
                     welcomelen = E.screencols;
@@ -282,10 +318,12 @@ void editorDrawRows(abuf *ab) {
                 abAppend(ab, "~", 1);
             }
         } else {
-            int len = E.row.size;
+            int len = E.row[filerow].size;
             // if text exceeds the width of the terminal
-            if (len > E.screencols) len = E.screencols; 
-            abAppend(ab,E.row.chars, len);
+            if (len > (E.screencols - 2))
+                len = (E.screencols - 2);
+            abAppend(ab, "~ ", 2);
+            abAppend(ab, E.row[filerow].chars, len);
         }
         abAppend(ab, "\x1b[K", 3);
         if (i < (E.screenrows - 1)) {
@@ -295,6 +333,8 @@ void editorDrawRows(abuf *ab) {
 }
 
 void editorRefreshScreen() {
+    editorScroll();
+
     abuf ab = ABUF_INIT;
     // clears the terminal screen and repositions the cursor \x1b (escape
     // character)
@@ -305,7 +345,7 @@ void editorRefreshScreen() {
     editorDrawRows(&ab);
 
     char buf[32];
-    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", E.cy + 1, E.cx + 1);
+    snprintf(buf, sizeof(buf), "\x1b[%d;%dH", (E.cy - E.rowoff) + 1, E.cx + 1);
     abAppend(&ab, buf, strlen(buf));
 
     abAppend(&ab, "\x1b[?25h", 6); // shows cursor
@@ -334,7 +374,7 @@ void editorMoveCursor(int key) {
         }
         break;
     case ARROW_DOWN:
-        if (E.cy < (E.screenrows - 1)) {
+        if (E.cy < E.numrows) {
             E.cy++;
         }
         break;
@@ -350,13 +390,13 @@ void editorProcessKeypress() {
         write(STDOUT_FILENO, "\x1B[H", 3);
         exit(0);
         break;
-    
+
     case HOME_KEY:
         E.cx = 0;
         break;
 
     case END_KEY:
-        E.cx = (E.screencols - 1); 
+        E.cx = (E.screencols - 1);
         break;
 
     case PAGE_UP:
@@ -381,16 +421,20 @@ void editorProcessKeypress() {
 void initEditor() {
     E.cx = 0;
     E.cy = 0;
+    E.rowoff = 0;
     E.numrows = 0;
+    E.row = NULL;
 
     if (getWindowSize(&E.screenrows, &E.screencols) == -1)
         die("getWindowSize");
 }
 
-int main() {
+int main(int argc, char *argv[]) {
     enableRawMode();
     initEditor();
-    editorOpen();
+    if (argc >= 2) {
+        editorOpen(argv[1]);
+    }
 
     while (1) {
         editorRefreshScreen();
